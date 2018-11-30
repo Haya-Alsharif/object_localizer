@@ -2,7 +2,7 @@
 #define LOCALIZER_H
 
 #include <ros/ros.h>
-
+#include <math.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/point_cloud.h>
@@ -29,7 +29,7 @@
 
 class ObjectLocalizer{
     public:
-        ObjectLocalizer(ros::NodeHandle* nodehandle, int& q, std::string& darknet_bounding_boxes, std::string& camera_pointcloud);
+        ObjectLocalizer(ros::NodeHandle* nodehandle, int& q, std::string& darknet_bounding_boxes, std::string& camera_pointcloud, std::string& detection_class, float& tolerance);
         ~ObjectLocalizer();
         
         tf::StampedTransform get_goal_camera_transform(const darknet_ros_msgs::BoundingBox& goal_bounding_box);
@@ -47,8 +47,8 @@ class ObjectLocalizer{
     private:
         ros::NodeHandle nh_;
         ros::Publisher pubGoal_;
-        std::string detection_class;
-        
+        std::string detectionClass_;
+        float tolerance_;
         message_filters::Subscriber<darknet_ros_msgs::BoundingBoxes> subBoundingBoxes_;
         message_filters::Subscriber<sensor_msgs::PointCloud2> subDepth_;
         message_filters::Subscriber<geometry_msgs::PoseStamped> subPose_;

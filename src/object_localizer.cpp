@@ -3,17 +3,20 @@
 /** 
  * Constructor 
  * **/
-ObjectLocalizer::ObjectLocalizer(ros::NodeHandle* nodehandle, int& q, std::string& darknet_bounding_boxes, std::string& camera_pointcloud):
+ObjectLocalizer::ObjectLocalizer(ros::NodeHandle* nodehandle, int& q, std::string& darknet_bounding_boxes, std::string& camera_pointcloud, std::string& detection_class, float& tolerance):
   nh_(*nodehandle),
   subBoundingBoxes_(nh_, darknet_bounding_boxes.c_str(), q),
   subDepth_(nh_, camera_pointcloud.c_str(), q),
   subPose_(nh_, "/mavros/local_position/pose", q),
-  sync_(MySyncPolicy(q),  subBoundingBoxes_, subDepth_, subPose_)
+  sync_(MySyncPolicy(q),  subBoundingBoxes_, subDepth_, subPose_),
+  detectionClass_(detection_class),
+  tolerance_(tolerance)
 {
   //sync_.setAgePenalty(1.0);
   sync_.registerCallback(boost::bind(&ObjectLocalizer::callback, this, _1, _2, _3));
-  nh_.getParam("detection_class", detection_class);
   pubGoal_ = nh_.advertise<geometry_msgs::PoseStamped>("/move_base_simple/goal", 1);
+
+
 }
 
 
@@ -117,10 +120,10 @@ geometry_msgs::PoseStamped ObjectLocalizer::goal_transform_frame(const std::stri
 
 
 /** 
- * check if goal is close to current position using manhatin distance 
+ * check if goal is close to current position L2 norm
  * **/
 bool ObjectLocalizer::goal_within_range(const float& tolerance, const geometry_msgs::PoseStamped& goal_local){
-  return (abs(goal_local.pose.position.x - currentPose_.pose.position.x) + abs(goal_local.pose.position.y - currentPose_.pose.position.y) < tolerance);
+  return (  sqrt(pow(abs(goal_local.pose.position.x - currentPose_.pose.position.x),2) + pow(abs(goal_local.pose.position.y - currentPose_.pose.position.y),2)  ) < tolerance  );
 }
 
 
@@ -182,11 +185,11 @@ void ObjectLocalizer::callback(const darknet_ros_msgs::BoundingBoxes::ConstPtr &
   setParam(*current_bounding_box, *current_depth, *curent_pose);
 
   // select certain calss, e.g. "person"
-  if (!detection_class.empty()){
-    currentBoundingBoxes_ = select_detection_class(currentBoundingBoxes_, detection_class);
+  if (!detectionClass_.empty()){
+    currentBoundingBoxes_ = select_detection_class(currentBoundingBoxes_, detectionClass_);
   }
   if (currentBoundingBoxes_.bounding_boxes.size()==0){
-    ROS_INFO("No detection of class type %s", detection_class.c_str());
+    ROS_INFO("No detection of class type %s", detectionClass_.c_str());
   }
   else{
     // select instance with largest probability
@@ -197,15 +200,11 @@ void ObjectLocalizer::callback(const darknet_ros_msgs::BoundingBoxes::ConstPtr &
     geometry_msgs::PoseStamped goal_camera = goal_camera_frame(goal_bounding_box);
     geometry_msgs::PoseStamped goal_local = goal_transform_frame(target_frame, goal_camera);
     ROS_INFO( "OBJECT WAS DETECTED AND LOCALIZED===================\nDetection Class = %s.\nDetection Confidence = of %0.2f\nLocation in %s frame = [%0.2f meter, %0.2f meter, %0.2f meter]\n============================================================\n", goal_bounding_box.Class.c_str(), goal_bounding_box.probability, 
-      target_frame.c_str(),
-      goal_local.pose.position.x,goal_local.pose.position.y,goal_local.pose.position.z 
+        target_frame.c_str(),
+        goal_local.pose.position.x,goal_local.pose.position.y,goal_local.pose.position.z 
     );
-
     // if the goal is detected and reached, set mession to accomplished and exit 
-    float tolerance = 1.0;
-    if(!goal_within_range(tolerance, goal_local)){
-      
-      
+    if(!goal_within_range(tolerance_, goal_local)){
       pubGoal_.publish(goal_local);
     }
     else{

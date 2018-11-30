@@ -19,19 +19,21 @@ int main (int argc, char** argv)
 {
   ros::init(argc, argv, "object_localizer_node");
   ros::NodeHandle nh; 
-  ros::Rate r(15); // 15 hz
+  ros::Rate r(0.3); // 1 hz
 
   // set topic params
   int q;
+  float tolerance;
   std::string darknet_bounding_boxes, camera_pointcloud, detection_class;
   nh.param<std::string>("darknet_bounding_boxes_topic", darknet_bounding_boxes, "/darknet_ros/bounding_boxes");
   nh.param<std::string>("camera_pointcloud_topic", camera_pointcloud, "/camera_down/depth/points");
   nh.param<std::string>("detection_class", detection_class, "");
+  nh.param<float>("goal_tolerance_range", tolerance, 0.7);
   nh.param<int>("queue_size", q, 10);
   //nh.getParam("camera_pointcloud_topic", camera_pointcloud);
   //nh.getParam("detection_class", detection_class);
   
-  ObjectLocalizer localizer(&nh, q, darknet_bounding_boxes, camera_pointcloud);
+  ObjectLocalizer localizer(&nh, q, darknet_bounding_boxes, camera_pointcloud, detection_class, tolerance);
   localizer.mission_accomplished = false;
 
   while (ros::ok() && !localizer.mission_accomplished){
