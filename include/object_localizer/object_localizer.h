@@ -27,7 +27,7 @@
 
 class ObjectLocalizer{
     public:
-        ObjectLocalizer(ros::NodeHandle* nodehandle, int& queue, std::string& darknet_bounding_boxes, std::string& pose, std::string& camera_info, std::string& detection_class, std::string& published_pose);
+        ObjectLocalizer(ros::NodeHandle* nodehandle);
         ~ObjectLocalizer();
         
         tf::StampedTransform get_goal_camera_transform(const darknet_ros_msgs::BoundingBox& goal_bounding_box);
@@ -39,29 +39,20 @@ class ObjectLocalizer{
         void setParam(const darknet_ros_msgs::BoundingBoxes& current_bounding_box, const geometry_msgs::PoseStamped& curent_pose, const sensor_msgs::CameraInfo& cam_info);
         void callback(const darknet_ros_msgs::BoundingBoxes::ConstPtr& current_bounding_box, const geometry_msgs::PoseStamped::ConstPtr& curent_pose, const sensor_msgs::CameraInfoConstPtr& cam_info);
 
-        geometry_msgs::PoseStamped goal_local;
-
     private:
         ros::NodeHandle nh_;
-
-        std::string detectionClass_;
-        //nh_.getParam("detection_class", detectionClass_);
         
-
-
         ros::Publisher pubGoal_;
-        //nh_.getParam("published_pose_topic", pubGoal_);
-
-
         message_filters::Subscriber<sensor_msgs::CameraInfo> subCameraInfo_;
         message_filters::Subscriber<darknet_ros_msgs::BoundingBoxes> subBoundingBoxes_;
         message_filters::Subscriber<geometry_msgs::PoseStamped> subPose_;
         typedef message_filters::sync_policies::ApproximateTime<darknet_ros_msgs::BoundingBoxes, geometry_msgs::PoseStamped, sensor_msgs::CameraInfo> MySyncPolicy; 
-        message_filters::Synchronizer<MySyncPolicy> sync_;
+        typedef message_filters::Synchronizer<MySyncPolicy> Sync;
+        boost::shared_ptr<Sync> sync_;
         
         darknet_ros_msgs::BoundingBoxes currentBoundingBoxes_;
         geometry_msgs::PoseStamped currentPose_;
-        
+        std::string detectionClass_;
         sensor_msgs::CameraInfo cameraInfo_;
 
         tf::TransformListener tfListener_;

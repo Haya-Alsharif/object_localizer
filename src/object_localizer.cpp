@@ -4,17 +4,30 @@
 /** 
  * Constructor 
  * **/
-ObjectLocalizer::ObjectLocalizer(ros::NodeHandle* nodehandle, int& queue, std::string& darknet_bounding_boxes, std::string& pose, std::string& camera_info, std::string& detection_class, std::string& published_pose):
-  nh_(*nodehandle),
-  subBoundingBoxes_(nh_, darknet_bounding_boxes.c_str(), queue),
-  subPose_(nh_, pose.c_str(), queue),
-  subCameraInfo_(nh_, camera_info.c_str(), queue),
-  sync_(MySyncPolicy(queue),  subBoundingBoxes_, subPose_, subCameraInfo_),
-  detectionClass_(detection_class.c_str())
+ObjectLocalizer::ObjectLocalizer(ros::NodeHandle* nodehandle):
+  nh_(*nodehandle)
 {
+  std::string pose, camera_info, darknet_bounding_boxes;
+  int queue;
+
+  nh_.getParam("darknet_bounding_boxes_topic", darknet_bounding_boxes);
+  nh_.getParam("pose_topic", pose);
+  nh_.getParam("camera_info_topic", camera_info);
+  nh_.getParam("queue_size", queue);
+
+  subBoundingBoxes_.subscribe(nh_, darknet_bounding_boxes.c_str(), queue);
+  subPose_.subscribe(nh_, pose.c_str(), queue);
+  subCameraInfo_.subscribe(nh_, camera_info.c_str(), queue);
+  sync_.reset(new Sync(MySyncPolicy(queue),  subBoundingBoxes_, subPose_, subCameraInfo_));
   //sync_.setAgePenalty(1.0);
-  sync_.registerCallback(boost::bind(&ObjectLocalizer::callback, this, _1, _2, _3));
-  pubGoal_ = nh_.advertise<geometry_msgs::PoseStamped>(published_pose, 1000);
+  sync_->registerCallback(boost::bind(&ObjectLocalizer::callback, this, _1, _2, _3));
+
+  nh_.getParam("detection_class", detectionClass_);
+
+  std::string published_pose;
+  nh_.getParam("published_pose_topic", published_pose);
+  pubGoal_ = nh_.advertise<geometry_msgs::PoseStamped>(published_pose, queue);
+
 }
 
 
@@ -68,8 +81,8 @@ tf::StampedTransform ObjectLocalizer::get_goal_camera_transform(const darknet_ro
   tf::StampedTransform transform;
   transform.setIdentity();
   transform.child_frame_id_ = "person";
-  transform.frame_id_ = currentBoundingBoxes_.image_header.frame_id; //camera_link frame
-  transform.stamp_ = currentBoundingBoxes_.header.stamp;
+  transform.frame_id_ = cameraInfo_.header.frame_id; //camera_link frame
+  transform.stamp_ = cameraInfo_.header.stamp;
 
   // set tf center
   transform.setOrigin(tf::Vector3(objectCenter.x,objectCenter.y,objectCenter.z));
@@ -129,9 +142,7 @@ geometry_msgs::PoseStamped ObjectLocalizer::goal_transform_frame(const std::stri
   try{ 
     tfListener_.transformPose(target_frame.c_str(), goal_camera, goal_target_frame);
   }
-  catch (tf::TransformException ex){
-    ROS_ERROR_STREAM("Error: " << ex.what());
-   }
+  catch (tf::TransformException ex){ }
   return goal_target_frame;
 }
 
@@ -142,9 +153,9 @@ geometry_msgs::PoseStamped ObjectLocalizer::goal_transform_frame(const std::stri
 darknet_ros_msgs::BoundingBoxes ObjectLocalizer::select_detection_class(const darknet_ros_msgs::BoundingBoxes& current_bounding_boxes, std::string& class_name )
 {
   darknet_ros_msgs::BoundingBoxes selected_bounding_boxes;
-  for(unsigned int i = 0; i < currentBoundingBoxes_.bounding_boxes.size(); ++i) {
-    if(currentBoundingBoxes_.bounding_boxes.at(i).Class == class_name.c_str()) {
-      selected_bounding_boxes.bounding_boxes.push_back(currentBoundingBoxes_.bounding_boxes.at(i));
+  for(unsigned int i = 0; i < current_bounding_boxes.bounding_boxes.size(); ++i) { 
+    if(current_bounding_boxes.bounding_boxes.at(i).Class == class_name) {
+      selected_bounding_boxes.bounding_boxes.push_back(current_bounding_boxes.bounding_boxes.at(i));
     }
   }
   return selected_bounding_boxes;
@@ -178,18 +189,16 @@ void ObjectLocalizer::setParam(const darknet_ros_msgs::BoundingBoxes& current_bo
   //select a calss if specifid
   if (!detectionClass_.empty()){
     currentBoundingBoxes_ = select_detection_class(current_bounding_box, detectionClass_);
-    std::cout << "detectionClass_ IS not" <<std::endl;
   }
   else{
     currentBoundingBoxes_ = current_bounding_box;
-    std::cout << "detectionClass_ IS empty" <<std::endl;
   }
 
   currentPose_ = curent_pose;
   cameraInfo_ = cam_info;
 
   // make sure transformation exist bewerrn camera frame and fcu or local_origin
-  tfListener_.waitForTransform("/local_origin",currentBoundingBoxes_.image_header.frame_id, currentBoundingBoxes_.header.stamp, ros::Duration(3.0));
+  tfListener_.waitForTransform("/local_origin",cameraInfo_.header.frame_id, cameraInfo_.header.stamp, ros::Duration(3.0));
 
 }
 
@@ -214,7 +223,7 @@ void ObjectLocalizer::callback(const darknet_ros_msgs::BoundingBoxes::ConstPtr& 
     // convert detected goal to desired frame. You can choose "/world" frame depending on expected goal position frame used by /move_base_simple
     std::string target_frame = "/local_origin";
     geometry_msgs::PoseStamped goal_camera = goal_camera_frame(goal_bounding_box);
-    goal_local = goal_transform_frame(target_frame, goal_camera);
+    geometry_msgs::PoseStamped goal_local = goal_transform_frame(target_frame, goal_camera);
 
     ROS_INFO("Object localizer: %s (%0.2f%%) detected at [%0.2f m, %0.2f m, %0.2f m] in %s", goal_bounding_box.Class.c_str(), goal_bounding_box.probability*100, 
         goal_local.pose.position.x,goal_local.pose.position.y,goal_local.pose.position.z,target_frame.c_str() 
