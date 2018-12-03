@@ -1,14 +1,17 @@
 <launch>
+
 	<arg name="down_camera_pointcloud_topics"   default="/camera/depth/points" />
   <arg name="darknet_bounding_boxes_topics"   default="/darknet_ros/bounding_boxes" />
   <arg name="detection_class"                 default="person" />
   <arg name="queue_size"                      default="10" />
   <arg name="goal_tolerance_range"            default="0.2" />
+
+  	<!--test-->
 	<node name="object_localizer_node" pkg="object_localizer" type="object_localizer" output="screen">
         <param name="camera_pointcloud_topic" 	    value="$(arg down_camera_pointcloud_topics)"/>
         <param name="darknet_bounding_boxes_topic" 	value="$(arg darknet_bounding_boxes_topics)"/>
         <param name="detection_class" 	            value="$(arg detection_class)"/>
         <param name="detection_class" 	            value="$(arg queue_size)"/>
-        <param name="goal_tolerance_range"          value="$(arg goal_tolerance_range)">
-  </node>
+ </node>
+
 </launch>
