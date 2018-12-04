@@ -5,6 +5,9 @@
 #include <math.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/point_types.h>
+#include <sensor_msgs/PointCloud2.h>
+#include <pcl/point_types.h>
+#include <pcl/conversions.h>
 
 #include <darknet_ros_msgs/BoundingBoxes.h>
 #include <geometry_msgs/PoseStamped.h>
@@ -36,8 +39,9 @@ class ObjectLocalizer{
         darknet_ros_msgs::BoundingBox select_largest_probability(const darknet_ros_msgs::BoundingBoxes& current_bounding_boxes);
         darknet_ros_msgs::BoundingBoxes select_detection_class(const darknet_ros_msgs::BoundingBoxes& current_bounding_boxes, std::string& class_name );
 
-        void setParam(const darknet_ros_msgs::BoundingBoxes& current_bounding_box, const geometry_msgs::PoseStamped& curent_pose, const sensor_msgs::CameraInfo& cam_info);
+        void check_and_publish();
         void callback(const darknet_ros_msgs::BoundingBoxes::ConstPtr& current_bounding_box, const geometry_msgs::PoseStamped::ConstPtr& curent_pose, const sensor_msgs::CameraInfoConstPtr& cam_info);
+        void callback(const darknet_ros_msgs::BoundingBoxes::ConstPtr& current_bounding_box, const sensor_msgs::PointCloud2ConstPtr& current_depth);
 
     private:
         ros::NodeHandle nh_;
@@ -46,13 +50,21 @@ class ObjectLocalizer{
         message_filters::Subscriber<sensor_msgs::CameraInfo> subCameraInfo_;
         message_filters::Subscriber<darknet_ros_msgs::BoundingBoxes> subBoundingBoxes_;
         message_filters::Subscriber<geometry_msgs::PoseStamped> subPose_;
-        typedef message_filters::sync_policies::ApproximateTime<darknet_ros_msgs::BoundingBoxes, geometry_msgs::PoseStamped, sensor_msgs::CameraInfo> MySyncPolicy; 
-        typedef message_filters::Synchronizer<MySyncPolicy> Sync;
-        boost::shared_ptr<Sync> sync_;
+        message_filters::Subscriber<sensor_msgs::PointCloud2> subDepth_;
+        
+        typedef message_filters::sync_policies::ApproximateTime<darknet_ros_msgs::BoundingBoxes, geometry_msgs::PoseStamped, sensor_msgs::CameraInfo> RangeFinderSyncPolicy; 
+        typedef message_filters::Synchronizer<RangeFinderSyncPolicy> RangeFinderSync;
+        boost::shared_ptr<RangeFinderSync> rangeFinderSyncPointer_;  
+
+        typedef message_filters::sync_policies::ApproximateTime<darknet_ros_msgs::BoundingBoxes, sensor_msgs::PointCloud2> DepthCameraSyncPolicy; 
+        typedef message_filters::Synchronizer<DepthCameraSyncPolicy> DepthCameraSync;
+        boost::shared_ptr<DepthCameraSync> depthCameraSyncPointer_;
         
         darknet_ros_msgs::BoundingBoxes currentBoundingBoxes_;
+        pcl::PointCloud<pcl::PointXYZ> currentDepth_;
+
         geometry_msgs::PoseStamped currentPose_;
-        std::string detectionClass_;
+        std::string detectionClass_, useDepthCamera_;
         sensor_msgs::CameraInfo cameraInfo_;
 
         tf::TransformListener tfListener_;

@@ -7,27 +7,33 @@
 ObjectLocalizer::ObjectLocalizer(ros::NodeHandle* nodehandle):
   nh_(*nodehandle)
 {
-  std::string pose, camera_info, darknet_bounding_boxes;
+  std::string darknet_bounding_boxes, published_pose;
   int queue;
-
   nh_.getParam("darknet_bounding_boxes_topic", darknet_bounding_boxes);
-  nh_.getParam("pose_topic", pose);
-  nh_.getParam("camera_info_topic", camera_info);
   nh_.getParam("queue_size", queue);
-
-  subBoundingBoxes_.subscribe(nh_, darknet_bounding_boxes.c_str(), queue);
-  subPose_.subscribe(nh_, pose.c_str(), queue);
-  subCameraInfo_.subscribe(nh_, camera_info.c_str(), queue);
-  sync_.reset(new Sync(MySyncPolicy(queue),  subBoundingBoxes_, subPose_, subCameraInfo_));
-  //sync_.setAgePenalty(1.0);
-  sync_->registerCallback(boost::bind(&ObjectLocalizer::callback, this, _1, _2, _3));
-
   nh_.getParam("detection_class", detectionClass_);
-
-  std::string published_pose;
   nh_.getParam("published_pose_topic", published_pose);
-  pubGoal_ = nh_.advertise<geometry_msgs::PoseStamped>(published_pose, queue);
+  nh_.getParam("camera_pointcloud_topic", useDepthCamera_);
+  subBoundingBoxes_.subscribe(nh_, darknet_bounding_boxes.c_str(), queue);
 
+  if (!useDepthCamera_.empty()){
+    ROS_INFO("going welll ..... ");
+    subDepth_.subscribe(nh_, useDepthCamera_.c_str(), queue);
+    depthCameraSyncPointer_.reset(new DepthCameraSync(DepthCameraSyncPolicy(queue), subBoundingBoxes_, subDepth_));
+    depthCameraSyncPointer_->registerCallback(boost::bind(&ObjectLocalizer::callback, this, _1, _2));
+  }
+  else{
+    std::string pose, camera_info;
+    nh_.getParam("camera_info_topic", camera_info);
+    nh_.getParam("pose_topic", pose);
+    subCameraInfo_.subscribe(nh_, camera_info.c_str(), queue);
+    subPose_.subscribe(nh_, pose.c_str(), queue);
+
+    rangeFinderSyncPointer_.reset(new RangeFinderSync(RangeFinderSyncPolicy(queue), subBoundingBoxes_, subPose_, subCameraInfo_)); //rangeFinderSyncPointer_.setAgePenalty(1.0);
+    rangeFinderSyncPointer_->registerCallback(boost::bind(&ObjectLocalizer::callback, this, _1, _2, _3));
+  }
+
+  pubGoal_ = nh_.advertise<geometry_msgs::PoseStamped>(published_pose, queue);
 }
 
 
@@ -42,47 +48,53 @@ ObjectLocalizer::~ObjectLocalizer() { }
  *  **/
 tf::StampedTransform ObjectLocalizer::get_goal_camera_transform(const darknet_ros_msgs::BoundingBox& goal_bounding_box){
 
-  // set camera parameters
-  float fx_ = cameraInfo_.K[0]; //focal length along the x-axis
-  float fy_ = cameraInfo_.K[4]; //focal length along the y-axis
-  float cx_ = cameraInfo_.K[2]; //principal point - x coordinate
-  float cy_ = cameraInfo_.K[5]; //principal point - y coordinate
-
   // compute object width and height
   double objectWidth = goal_bounding_box.xmax - goal_bounding_box.xmin;
   double objectHeight = goal_bounding_box.ymax - goal_bounding_box.ymin;
 
-  // compute object center
+  // compute object center + rotation axis x y z using the 2 points on the object
   double xPosCenter = goal_bounding_box.xmin + objectWidth*0.5;
   double yPosCenter = goal_bounding_box.ymin + objectHeight*0.5;
-  pcl::PointXYZ objectCenter;
-  objectCenter.x = ((xPosCenter-cx_)*currentPose_.pose.position.z)/fx_;
-  objectCenter.y = ((yPosCenter-cy_)*currentPose_.pose.position.z)/fy_;
-  objectCenter.z = currentPose_.pose.position.z;
-
-
-  // compute the rotation axis x y z using the 2 points on the object
   double xHorizontalAxis = xPosCenter + objectWidth*0.5;
   double yHorizontalAxis = yPosCenter;
-  pcl::PointXYZ horizontalAxis;
-  horizontalAxis.x = ((xHorizontalAxis-cx_)*currentPose_.pose.position.z)/fx_;
-  horizontalAxis.y = ((yHorizontalAxis-cy_)*currentPose_.pose.position.z)/fy_;
-  horizontalAxis.z = currentPose_.pose.position.z;
-
   double xVerticalAxis = xPosCenter;
   double yVerticalAxis = yPosCenter + objectHeight*0.5;
+  pcl::PointXYZ objectCenter;
+  pcl::PointXYZ horizontalAxis;
   pcl::PointXYZ verticalAxis;
-  verticalAxis.x = ((xVerticalAxis-cx_)*currentPose_.pose.position.z)/fx_;
-  verticalAxis.y = ((yVerticalAxis-cy_)*currentPose_.pose.position.z)/fy_;
-  verticalAxis.z = currentPose_.pose.position.z;
   
-
-  // define a tf for the object
-  tf::StampedTransform transform;
+  tf::StampedTransform transform; // define a tf for the object
   transform.setIdentity();
   transform.child_frame_id_ = "person";
-  transform.frame_id_ = cameraInfo_.header.frame_id; //camera_link frame
-  transform.stamp_ = cameraInfo_.header.stamp;
+
+  if (!useDepthCamera_.empty()){
+    objectCenter = currentDepth_.at(xPosCenter, yPosCenter);
+    horizontalAxis = currentDepth_.at(xHorizontalAxis, yHorizontalAxis);
+    pcl::PointXYZ verticalAxis = currentDepth_.at(xVerticalAxis, yVerticalAxis);
+
+    transform.frame_id_ = currentBoundingBoxes_.image_header.frame_id; //camera_link frame
+    transform.stamp_ = currentBoundingBoxes_.image_header.stamp;
+  }
+  else{
+    //set camera parameters
+    float fx_ = cameraInfo_.K[0]; //focal length along the x-axis
+    float fy_ = cameraInfo_.K[4]; //focal length along the y-axis
+    float cx_ = cameraInfo_.K[2]; //principal point - x coordinate
+    float cy_ = cameraInfo_.K[5]; //principal point - y coordinate
+
+    objectCenter.x = ((xPosCenter-cx_)*currentPose_.pose.position.z)/fx_;
+    objectCenter.y = ((yPosCenter-cy_)*currentPose_.pose.position.z)/fy_;
+    objectCenter.z = currentPose_.pose.position.z;
+    horizontalAxis.x = ((xHorizontalAxis-cx_)*currentPose_.pose.position.z)/fx_;
+    horizontalAxis.y = ((yHorizontalAxis-cy_)*currentPose_.pose.position.z)/fy_;
+    horizontalAxis.z = currentPose_.pose.position.z;
+    verticalAxis.x = ((xVerticalAxis-cx_)*currentPose_.pose.position.z)/fx_;
+    verticalAxis.y = ((yVerticalAxis-cy_)*currentPose_.pose.position.z)/fy_;
+    verticalAxis.z = currentPose_.pose.position.z;
+
+    transform.frame_id_ = currentBoundingBoxes_.image_header.frame_id; //camera_link frame
+    transform.stamp_ = currentBoundingBoxes_.image_header.stamp;
+  }
 
   // set tf center
   transform.setOrigin(tf::Vector3(objectCenter.x,objectCenter.y,objectCenter.z));
@@ -126,9 +138,6 @@ geometry_msgs::PoseStamped ObjectLocalizer::goal_camera_frame(const darknet_ros_
   goal_camera.pose.orientation.x = transform.getRotation().getX();
   goal_camera.pose.orientation.y = transform.getRotation().getY();
   goal_camera.pose.orientation.z = transform.getRotation().getZ();
-
-  //ROS_INFO("goal in /camera_link frame: [%0.2f, %0.2f, %0.2f]",goal_camera.pose.position.x,goal_camera.pose.position.y,goal_camera.pose.position.z);
-
   return goal_camera;
 }
 
@@ -182,37 +191,10 @@ darknet_ros_msgs::BoundingBox ObjectLocalizer::select_largest_probability(const 
 
 
 /** 
- * set private parameter when new messages are recieved
- * **/
-void ObjectLocalizer::setParam(const darknet_ros_msgs::BoundingBoxes& current_bounding_box, const geometry_msgs::PoseStamped& curent_pose, const sensor_msgs::CameraInfo& cam_info){
-  
-  //select a calss if specifid
-  if (!detectionClass_.empty()){
-    currentBoundingBoxes_ = select_detection_class(current_bounding_box, detectionClass_);
-  }
-  else{
-    currentBoundingBoxes_ = current_bounding_box;
-  }
-
-  currentPose_ = curent_pose;
-  cameraInfo_ = cam_info;
-
-  // make sure transformation exist bewerrn camera frame and fcu or local_origin
-  tfListener_.waitForTransform("/local_origin",cameraInfo_.header.frame_id, cameraInfo_.header.stamp, ros::Duration(3.0));
-
-}
-
-
-/** 
  * main syncronized callback when new messages are recieved
  * **/
-void ObjectLocalizer::callback(const darknet_ros_msgs::BoundingBoxes::ConstPtr& current_bounding_box, const geometry_msgs::PoseStamped::ConstPtr& curent_pose, const sensor_msgs::CameraInfoConstPtr& cam_info){ 
-
-  // set private paramteres
-  setParam(*current_bounding_box, *curent_pose, *cam_info);
-  
-  if(currentPose_.pose.position.z < 0.2) { ROS_INFO("Object localizer: waiting for take off..."); }
-  else if(currentBoundingBoxes_.bounding_boxes.size()==0){
+void ObjectLocalizer::check_and_publish(){ 
+  if(currentBoundingBoxes_.bounding_boxes.size()==0){
     if (!detectionClass_.empty()){ ROS_INFO("Object localizer: no detection of class type %s", detectionClass_.c_str()); }
     else { ROS_INFO("Object localizer: no detection"); } 
   }
@@ -227,8 +209,41 @@ void ObjectLocalizer::callback(const darknet_ros_msgs::BoundingBoxes::ConstPtr& 
 
     ROS_INFO("Object localizer: %s (%0.2f%%) detected at [%0.2f m, %0.2f m, %0.2f m] in %s", goal_bounding_box.Class.c_str(), goal_bounding_box.probability*100, 
         goal_local.pose.position.x,goal_local.pose.position.y,goal_local.pose.position.z,target_frame.c_str() 
-    );
-    
+    );   
     pubGoal_.publish(goal_local);  
   }
+}
+
+
+/** 
+ * main syncronized callback when new messages with pose info instead of depth
+ * **/
+void ObjectLocalizer::callback(const darknet_ros_msgs::BoundingBoxes::ConstPtr& current_bounding_box, const geometry_msgs::PoseStamped::ConstPtr& curent_pose, const sensor_msgs::CameraInfoConstPtr& cam_info){ 
+
+  //select a calss if specifid
+  if (!detectionClass_.empty()){
+    currentBoundingBoxes_ = select_detection_class(*current_bounding_box, detectionClass_);
+  }
+  else{ currentBoundingBoxes_ = *current_bounding_box; }
+  currentPose_ = *curent_pose;
+  cameraInfo_ = *cam_info;
+  tfListener_.waitForTransform("/local_origin",currentBoundingBoxes_.image_header.frame_id, currentBoundingBoxes_.image_header.stamp, ros::Duration(3.0));
+  check_and_publish();
+}
+
+
+/** 
+ * main syncronized callback when new messages with depth info are recieved
+ * **/
+void ObjectLocalizer::callback(const darknet_ros_msgs::BoundingBoxes::ConstPtr& current_bounding_box, const sensor_msgs::PointCloud2ConstPtr& current_depth){ 
+
+  //select a calss if specifid
+  if (!detectionClass_.empty()){
+    currentBoundingBoxes_ = select_detection_class(*current_bounding_box, detectionClass_);
+  }
+  else{ currentBoundingBoxes_ = *current_bounding_box; }
+  pcl::fromROSMsg(*current_depth, currentDepth_);
+  tfListener_.waitForTransform("/local_origin",currentBoundingBoxes_.image_header.frame_id, currentBoundingBoxes_.image_header.stamp, ros::Duration(3.0));
+
+  check_and_publish();
 }
