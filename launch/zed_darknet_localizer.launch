@@ -1,0 +1,114 @@
+<launch>
+    <arg name="output"                                  default="screen"/>
+    <arg name="output_supress"                          default="log"/>
+
+    <arg name="depth_camera"                            default="true"/>
+    <!-- parameter to set if your depth_camera = true -->
+    <arg name="depth_camera_image_topic"                default="/camera_down/rgb/image_raw"/>
+    <arg name="depth_camera_info_topic"                 default="/camera_down/depth/camera_info"/>
+    <arg name="depth_camera_pointcloud_topic"           default="/camera_down/depth/points"/>
+    <arg name="depth_camera_frame_id"                   default="camera_link_down"/>
+    <!-- parameter to set if your depth_camera = false -->
+    <arg name="camera_namespace"                        default="zed"/>
+    <arg name="zed_camera_right_image_topic"            default="$(arg camera_namespace)/right/image_raw"/>
+    <arg name="zed_camera_right_info_topic"             default="$(arg camera_namespace)/right/camera_info"/>
+    <arg name="zed_camera_right_frame_id"               default="right_frame_id"/>
+
+
+
+    <!-- ZED cpu package launch node-->
+    <arg name="config_file_location"                    default="$(find zed_cpu_ros)/config/SN10027048.conf"/>
+    <arg name="device_id"                               default="0"/> <!-- to find your device id, use `ls /dev/ | grep video*` and look for the numbder after video -->
+    <arg name="resolution"                              default="3"/>
+    <arg name="frame_rate"                              default="30"/>
+    <arg name="show_image"                              default="false"/>
+    <arg name="encoding"                                default="bgr8"/>
+    <arg name="use_zed_config"                          default="false"/>
+    <arg name="left_frame_id"                           default="left_frame_id"/>
+    <arg name="right_frame_id"                          default="right_frame_id"/>
+    <arg name="left_cam_info_topic"                     default="left/camera_info"/>
+    <arg name="right_cam_info_topic"                    default="right/camera_info"/>
+    <node pkg="zed_cpu_ros" type="zed_cpu_ros" name="zed_cpu_ros_node" output="$(arg output_supress)" ns="$(arg camera_namespace)" required="true">
+        <param name="resolution"                        value="$(arg resolution)" unless="$(eval resolution>3)"/>
+        <param name="frame_rate"                        value="$(arg frame_rate)"/>
+        <param name="config_file_location"              value="$(arg config_file_location)"/>
+        <param name="show_image"                        value="$(arg show_image)"/>
+        <param name="left_frame_id"                     value="$(arg left_frame_id)"/>
+        <param name="right_frame_id"                    value="$(arg right_frame_id)"/>
+        <param name="use_zed_config"                    value="$(arg use_zed_config)"/>
+        <param name="device_id"                         value="$(arg device_id)"/>
+        <param name="encoding"                          value="$(arg encoding)"/>
+        <param name="left_cam_info_topic"               value="$(arg left_cam_info_topic)"/>
+        <param name="right_cam_info_topic"              value="$(arg right_cam_info_topic)"/>
+    </node>
+
+   
+    
+    <!-- PX4 SITL + ZED launch node -->
+    <arg name="rviz_cfg"                                default="$(find rtabmap_ros)/launch/config/demo_px4_local_avoidance.rviz" />
+    <arg name="world_file_name"                         default="erl" />
+    <arg name="world_path"                              default="$(find local_planner)/../sim/worlds/$(arg world_file_name).world" />
+    <node pkg="tf" type="static_transform_publisher" name="tf_depth_camera"     args="0 0 0 -1.57 0 -1.57 fcu camera_link 10"/>
+
+    <!-- this define transform from camera to local origin through fcu-->
+    <node     if="$(arg depth_camera)" pkg="tf" type="static_transform_publisher" name="tf_depth_camera_2"   args="0 0 0 -1.57 0 -3.14 fcu $(arg depth_camera_frame_id) 10"/> 
+    <node unless="$(arg depth_camera)" pkg="tf" type="static_transform_publisher" name="tf_depth_camera_2"   args="0 0 0 -1.57 0 -3.14 fcu $(arg zed_camera_right_frame_id) 10"/> 
+    
+    <include file="$(find local_planner)/launch/local_planner_sitl_mavros.launch" >
+        <arg name="model"                               value="iris_depth_camera" />
+        <arg name="world_path"                          value="$(arg world_path)" />
+    </include>
+    
+    
+
+    <!-- Local planner launch node -->  
+    <env name="ROSCONSOLE_CONFIG_FILE" value="$(find local_planner)/resource/custom_rosconsole.conf"/>
+    <rosparam command="load" file="$(find local_planner)/cfg/params.yaml"/>
+    <arg name="pointcloud_topics_simulator" default="[/camera/depth/points]"/>
+    <node name="local_planner_node" pkg="local_planner" type="local_planner_node" output="$(arg output_supress)" >
+        <param name="goal_x_param"                      value="3" />
+        <param name="goal_y_param"                      value="8" />
+        <param name="goal_z_param"                      value="7" />
+        <param name="world_name"                        value="$(find local_planner)/../sim/worlds/$(arg world_file_name).yaml" />
+        <rosparam param="pointcloud_topics" subst_value="True">$(arg pointcloud_topics_simulator)</rosparam> 
+    </node>
+
+
+
+    <!-- Darknet object detection launch node -->
+    <arg name="darknet_bounding_boxes_topics"           default="/darknet_ros/bounding_boxes" />
+    <arg name="yolo_weights_path"                       default="$(find darknet_ros)/yolo_network_config/weights"/>
+    <arg name="yolo_config_path"                        default="$(find darknet_ros)/yolo_network_config/cfg"/>
+    <rosparam command="load" ns="darknet_ros" file="$(find darknet_ros)/config/ros.yaml"/>
+    <rosparam command="load" ns="darknet_ros" file="$(find darknet_ros)/config/yolov2-tiny-voc.yaml"/>
+    <node pkg="darknet_ros" type="darknet_ros" name="darknet_ros" output="$(arg output_supress)" launch-prefix="">
+        <param name="weights_path"                      value="$(arg yolo_weights_path)" />
+        <param name="config_path"                       value="$(arg yolo_config_path)"  />
+        <param     if="$(arg depth_camera)"             name="subscribers/camera_reading/topic"   value="$(arg depth_camera_image_topic)"/>
+        <param unless="$(arg depth_camera)"             name="subscribers/camera_reading/topic"   value="$(arg zed_camera_right_image_topic)"/>
+        <param name="publishers/bounding_boxes/topic"   value="$(arg darknet_bounding_boxes_topics)"/>
+    </node>
+
+    
+
+    <!-- Obejct localization launch node -->
+    <arg name="detection_class"                         default="" />
+    <arg name="queue_size"                              default="1" />
+    <arg name="local_pose_topic"                        default="/mavros/local_position/pose"/>
+    <arg name="published_pose_topic"                    default="/detected_object_3d_pos"/>
+    <node name="object_localizer_node" pkg="object_localizer" type="object_localizer_node" output="$(arg output)">
+        <param     if="$(arg depth_camera)"             name="camera_info_topic"            value="$(arg depth_camera_info_topic)"/>
+        <param unless="$(arg depth_camera)"             name="camera_info_topic"            value="$(arg zed_camera_right_info_topic)"/>
+        <param name="darknet_bounding_boxes_topic" 	    value="$(arg darknet_bounding_boxes_topics)"/>
+        <param name="pose_topic" 	                    value="$(arg local_pose_topic)"/>
+        <param name="detection_class" 	                value="$(arg detection_class)"/>
+        <param name="queue_size"                        value="$(arg queue_size)"/>
+        <param name="published_pose_topic"              value="$(arg published_pose_topic)"/>
+        <param if="$(arg depth_camera)"                 name="camera_pointcloud_topic"      value="$(arg depth_camera_pointcloud_topic)"/>
+    </node>
+
+
+
+    <!-- Visualizing rviz launch node -->
+    <node pkg="rviz" type="rviz" name="rviz" args="-d $(arg rviz_cfg)"/>
+</launch>
