@@ -15,7 +15,7 @@
     <arg name="left_frame_id"                           default="left_frame_id"/>
     <arg name="right_frame_id"                          default="right_frame_id"/>
     <arg name="left_cam_info_topic"                     default="left/camera_info"/>
-    <arg name="right_cam_info_topic"                     default="right/camera_info"/>
+    <arg name="right_cam_info_topic"                    default="right/camera_info"/>
 
     <node pkg="zed_cpu_ros" type="zed_cpu_ros" name="zed_cpu_ros_node" output="$(arg output_supress)" ns="$(arg camera_namespace)" required="true">
         <param name="resolution"                        value="$(arg resolution)" unless="$(eval resolution>3)"/>
